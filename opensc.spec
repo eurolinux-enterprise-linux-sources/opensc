@@ -1,32 +1,24 @@
-%global commit0 777e2a3751e3f6d53f056c98e9e20e42af674fb1
-%global shortcommit0 %(c=%{commit0}; echo ${c:0:7})
-
 Name:           opensc
-Version:        0.16.0
-Release:        8.20170227git%{shortcommit0}%{?dist}
+Version:        0.19.0
+Release:        3%{?dist}
 Summary:        Smart card library and applications
 
 Group:          System Environment/Libraries
 License:        LGPLv2+
 URL:            https://github.com/OpenSC/OpenSC/wiki
-Source0:        https://github.com/OpenSC/OpenSC/archive/%{commit0}.zip#/%{name}-%{version}-git%{shortcommit0}.zip
+Source0:        https://github.com/OpenSC/OpenSC/releases/download/%{version}/%{name}-%{version}.tar.gz
 Source1:        opensc.module
 Source2:        pkcs11-switch.sh
-Patch0:		opensc-0.16.0-coverity.patch
-Patch1:		opensc-0.16.0-cardos.patch
-Patch2:		opensc-0.16.0-lock.patch
-# Use label from certificate DN if there is none (#1448555)
-Patch3:		opensc-0.16.0-labels-from-dn.patch
-# Use Cardholder name in the token label (#1449740)
-Patch4:		opensc-0.16.0-piv-cardholder-name.patch
-# Avoid infinite loop when reading CAC cards (#1473335)
-Patch5:		opensc-0.16.0-infinite-loop.patch
-# Workaround for CAC Alt tokens (#1473418)
-Patch6:		opensc-0.16.0-cac-alt.patch
-# Copy labels from certificate (#1448555)
-Patch7:		opensc-0.16.0-coolkey-labels.patch
-# Properly parse multi-byte length (#1473418)
-Patch8:		opensc-0.16.0-simpletlv.patch
+# Disable pinpad by default and use backward compatible configuration (#1547117, #1547744)
+Patch1:         opensc-0.19.0-config.patch
+# https://github.com/OpenSC/OpenSC/pull/1489
+Patch2:         opensc-0.19.0-coverity.patch
+# https://github.com/OpenSC/OpenSC/pull/1500
+Patch3:         opensc-0.19.0-coolkey-matching.patch
+# https://github.com/OpenSC/OpenSC/pull/1502
+Patch4:         opensc-0.19.0-cac1.patch
+# https://github.com/OpenSC/OpenSC/pull/1549
+Patch5:         opensc-0.19.0-dual.patch
 
 BuildRequires:  pcsc-lite-devel
 BuildRequires:  readline-devel
@@ -50,30 +42,31 @@ every software/card that does so, too.
 
 
 %prep
-%setup -q -n OpenSC-%{commit0}
-%patch0 -p1 -b .coverity
-%patch1 -p1 -b .cardos
-%patch2 -p1 -b .lock
-%patch3 -p1 -b .label
-%patch4 -p1 -b .cardholder
-%patch5 -p1 -b .infinite
-%patch6 -p1 -b .cac-alt
-%patch7 -p1 -b .coolkey-labels
-%patch8 -p1 -b .simpletlv
+%setup -q
+%patch1 -p1 -b .config
+%patch2 -p1 -b .coverity
+%patch3 -p1 -b .coolkey-match
+%patch4 -p1 -b .cac1
+%patch5 -p1 -b .dual
 
 cp -p src/pkcs15init/README ./README.pkcs15init
 cp -p src/scconf/README.scconf .
 # No {_libdir} here to avoid multilib conflicts; it's just an example
-sed -i -e 's|/usr/local/towitoko/lib/|/usr/lib/ctapi/|' etc/opensc.conf.in
+sed -i -e 's|/usr/local/towitoko/lib/|/usr/lib/ctapi/|' etc/opensc.conf.example.in
 
 
 %build
 autoreconf -fvi
+%ifarch %{ix86} ppc s390
 sed -i -e 's/opensc.conf/opensc-%{_arch}.conf/g' src/libopensc/Makefile.in
+%endif
 sed -i -e 's|"/lib /usr/lib\b|"/%{_lib} %{_libdir}|' configure # lib64 rpaths
 %configure  --disable-static \
   --disable-assert \
   --enable-pcsc \
+  --disable-tests `# Broken release tarball fails to build them` \
+  --disable-notify `# This was not present in previous release` \
+  --with-completiondir=no `#Bash completion is disabled` \
   --enable-sm \
   --with-pcsc-provider=libpcsclite.so.1
 make %{?_smp_mflags} V=1
@@ -81,12 +74,23 @@ make %{?_smp_mflags} V=1
 
 %install
 make install DESTDIR=$RPM_BUILD_ROOT
-rm -f $RPM_BUILD_ROOT%{_sysconfdir}/opensc.conf
-install -Dpm 644 etc/opensc.conf $RPM_BUILD_ROOT%{_sysconfdir}/opensc-%{_arch}.conf
+rm -f $RPM_BUILD_ROOT%{_bindir}/opensc-notify
 install -Dpm 644 %{SOURCE1} $RPM_BUILD_ROOT%{_datadir}/p11-kit/modules/opensc.module
 install -Dpm 755 %{SOURCE2} $RPM_BUILD_ROOT%{_bindir}/pkcs11-switch
+
+%ifarch %{ix86} ppc s390
+# To avoid multilib issues, move these files on 32b intel architectures
+rm -f $RPM_BUILD_ROOT%{_sysconfdir}/opensc.conf
+install -Dpm 644 etc/opensc.conf $RPM_BUILD_ROOT%{_sysconfdir}/opensc-%{_arch}.conf
+rm -f $RPM_BUILD_ROOT%{_mandir}/man5/opensc.conf.5
+install -Dpm 644 doc/files/opensc.conf.5 $RPM_BUILD_ROOT%{_mandir}/man5/opensc-%{_arch}.conf.5
 # use NEWS file timestamp as reference for configuration file
 touch -r NEWS $RPM_BUILD_ROOT%{_sysconfdir}/opensc-%{_arch}.conf
+touch -r NEWS $RPM_BUILD_ROOT%{_mandir}/man5/opensc-%{_arch}.conf.5
+%else
+# For backward compatibility, symlink the old location to the new files
+ln -s %{_sysconfdir}/opensc.conf $RPM_BUILD_ROOT%{_sysconfdir}/opensc-%{_arch}.conf
+%endif
 
 find $RPM_BUILD_ROOT%{_libdir} -type f -name "*.la" | xargs rm
 
@@ -97,10 +101,15 @@ rm -rf $RPM_BUILD_ROOT%{_datadir}/doc/opensc
 # Remove the symlink as nothing is supposed to link against libopensc.
 rm -f $RPM_BUILD_ROOT%{_libdir}/libopensc.so
 rm -f $RPM_BUILD_ROOT%{_libdir}/libsmm-local.so
+rm -f $RPM_BUILD_ROOT%{_mandir}/man1/opensc-notify.1*
+rm -f $RPM_BUILD_ROOT%{_datadir}/applications/org.opensc.notify.desktop
 %if 0%{?rhel}
 rm -rf %{buildroot}%{_sysconfdir}/bash_completion.d/
 %endif
 
+# the npa-tool builds to nothing since we do not have OpenPACE library
+rm -rf %{buildroot}%{_bindir}/npa-tool
+rm -rf %{buildroot}%{_mandir}/man1/npa-tool.1*
 
 %post -p /sbin/ldconfig
 
@@ -115,6 +124,13 @@ rm -rf %{buildroot}%{_sysconfdir}/bash_completion.d/
 %{_sysconfdir}/bash_completion.d/*
 %endif
 
+%ifarch %{ix86} ppc s390
+%{_mandir}/man5/opensc-%{_arch}.conf.5*
+%else
+%config(noreplace) %{_sysconfdir}/opensc.conf
+%{_mandir}/man5/opensc.conf.5*
+%endif
+
 %config(noreplace) %{_sysconfdir}/opensc-%{_arch}.conf
 %{_datadir}/p11-kit/modules/opensc.module
 %{_bindir}/cardos-tool
@@ -126,6 +142,7 @@ rm -rf %{buildroot}%{_sysconfdir}/bash_completion.d/
 %{_bindir}/openpgp-tool
 %{_bindir}/opensc-explorer
 %{_bindir}/opensc-tool
+%{_bindir}/opensc-asn1
 %{_bindir}/piv-tool
 %{_bindir}/pkcs11-tool
 %{_bindir}/pkcs11-switch
@@ -135,6 +152,7 @@ rm -rf %{buildroot}%{_sysconfdir}/bash_completion.d/
 %{_bindir}/sc-hsm-tool
 %{_bindir}/dnie-tool
 %{_bindir}/westcos-tool
+%{_bindir}/egk-tool
 %{_libdir}/lib*.so.*
 %{_libdir}/opensc-pkcs11.so
 %{_libdir}/pkcs11-spy.so
@@ -154,6 +172,7 @@ rm -rf %{buildroot}%{_sysconfdir}/bash_completion.d/
 %{_mandir}/man1/openpgp-tool.1*
 %{_mandir}/man1/opensc-explorer.*
 %{_mandir}/man1/opensc-tool.1*
+%{_mandir}/man1/opensc-asn1.1*
 %{_mandir}/man1/piv-tool.1*
 %{_mandir}/man1/pkcs11-tool.1*
 %{_mandir}/man1/pkcs15-crypt.1*
@@ -162,10 +181,43 @@ rm -rf %{buildroot}%{_sysconfdir}/bash_completion.d/
 %{_mandir}/man1/sc-hsm-tool.1*
 %{_mandir}/man1/westcos-tool.1*
 %{_mandir}/man1/dnie-tool.1*
-%{_mandir}/man5/*.5*
+%{_mandir}/man1/egk-tool.1*
+%{_mandir}/man5/pkcs15-profile.5*
 
 
 %changelog
+* Wed Mar 27 2019 Jakub Jelen <jjelen@redhat.com> - 0.19.0-3
+- Make OpenSC multilib also on s390 and ppc arches
+
+* Wed Mar 27 2019 Jakub Jelen <jjelen@redhat.com> - 0.19.0-2
+- Make OpenSC multilib again by moving the conflicting files on ix86 arch
+
+* Thu Feb 07 2019 Jakub Jelen <jjelen@redhat.com> - 0.19.0-1
+- Rebase to new upstream release (#1656791)
+  - Add Support for HID Crescendo 144K (#1612372)
+  - Add Support for CAC Alt tokens (#1645581)
+  - Fix usage detection from certificates (#1672898)
+  - Fix security issues:
+    - CVE-2018-16391
+    - CVE-2018-16392
+    - CVE-2018-16393
+    - CVE-2018-16418
+    - CVE-2018-16419
+    - CVE-2018-16420
+    - CVE-2018-16421
+    - CVE-2018-16422
+    - CVE-2018-16423
+    - CVE-2018-16426
+    - CVE-2018-16427
+
+* Tue Jul 03 2018 Jakub Jelen <jjelen@redhat.com> - 0.16.0-10.20170227git
+- Improve support for ECC-enabled CardOS 5.3 card (#1562277)
+
+* Tue Jun 19 2018 Jakub Jelen <jjelen@redhat.com> - 0.16.0-9.20170227git
+- make ECPoint behavior standards compliant by default (#1562572)
+- allow mechanism to be specified in hexadecimal (#1562572)
+- Disable pinpad by default (#1547117, #1547744)
+
 * Wed Jan 03 2018 Jakub Jelen <jjelen@redhat.com> - 0.16.0-8.20170227git
 - Copy labels from certificate (#1448555)
 - Avoid infinite loop in CAC driver when reading non-CAC cards (#1473335)

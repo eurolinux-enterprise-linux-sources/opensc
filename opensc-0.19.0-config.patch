@@ -1,0 +1,14 @@
+diff -up opensc-0.19.0/etc/opensc.conf.pinpad opensc-0.19.0/etc/opensc.conf
+--- opensc-0.19.0/etc/opensc.conf.pinpad	2019-02-06 18:14:26.808343875 +0100
++++ opensc-0.19.0/etc/opensc.conf	2019-02-06 18:17:06.747828950 +0100
+@@ -4,4 +4,10 @@ app default {
+ 	framework pkcs15 {
+ 		# use_file_caching = true;
+ 	}
++	reader_driver pcsc {
++		# RHEL 7.6: Disabled by default, because of many broken readers
++		enable_pinpad = false;
++		# RHEL 7.7: Backward compatible value with previous version
++		disconnect_action = unpower;
++	}
+ }

@@ -1,0 +1,446 @@
+diff --git a/src/libopensc/card-epass2003.c b/src/libopensc/card-epass2003.c
+index 49b593f9..299520d6 100644
+--- a/src/libopensc/card-epass2003.c
++++ b/src/libopensc/card-epass2003.c
+@@ -1846,11 +1846,6 @@ epass2003_process_fci(struct sc_card *card, sc_file_t * file, const u8 * buf, si
+ 				case 0x04:
+ 					file->ef_structure = SC_FILE_EF_LINEAR_FIXED;
+ 					break;
+-				case 0x03:
+-				case 0x05:
+-				case 0x06:
+-				case 0x07:
+-					break;
+ 				default:
+ 					break;
+ 				}
+diff --git a/src/libopensc/card-iasecc.c b/src/libopensc/card-iasecc.c
+index 254f8aa5..7eb3f5d0 100644
+--- a/src/libopensc/card-iasecc.c
++++ b/src/libopensc/card-iasecc.c
+@@ -2406,7 +2406,11 @@ iasecc_pin_reset(struct sc_card *card, struct sc_pin_cmd_data *data, int *tries_
+ 		sc_format_path("3F00", &path);
+ 		path.type = SC_PATH_TYPE_FILE_ID;
+ 		rv = iasecc_select_file(card, &path, NULL);
+-		LOG_TEST_RET(ctx, rv, "Unable to select MF");
++		if (rv != SC_SUCCESS) {
++			sc_file_free(save_current);
++			sc_log(ctx, "Unable to select MF");
++			LOG_FUNC_RETURN(ctx, rv);
++		}
+ 	}
+ 
+ 	memset(&sdo, 0, sizeof(sdo));
+@@ -3478,9 +3482,12 @@ iasecc_get_free_reference(struct sc_card *card, struct iasecc_ctl_get_free_refer
+ 
+ 			sc_log(ctx, "found empty key slot %i", idx);
+ 			break;
++		} else if (rv != SC_SUCCESS) {
++			iasecc_sdo_free(card, sdo);
++
++			sc_log(ctx, "get new key reference failed");
++			LOG_FUNC_RETURN(ctx, rv);
+ 		}
+-		else
+-			LOG_TEST_RET(ctx, rv, "get new key reference failed");
+ 
+ 		sz = *(sdo->docp.size.value + 0) * 0x100 + *(sdo->docp.size.value + 1);
+ 		sc_log(ctx,
+diff --git a/src/libopensc/card-muscle.c b/src/libopensc/card-muscle.c
+index c91b8d5e..be5b9f14 100644
+--- a/src/libopensc/card-muscle.c
++++ b/src/libopensc/card-muscle.c
+@@ -455,6 +455,7 @@ static int _listFile(mscfs_file_t *file, int reset, void *udata)
+ static int muscle_init(sc_card_t *card)
+ {
+ 	muscle_private_t *priv;
++	int r;
+ 
+ 	card->name = "MuscleApplet";
+ 	card->drv_data = malloc(sizeof(muscle_private_t));
+@@ -478,7 +479,10 @@ static int muscle_init(sc_card_t *card)
+ 	card->caps |= SC_CARD_CAP_RNG;
+ 
+ 	/* Card type detection */
+-	_sc_match_atr(card, muscle_atrs, &card->type);
++	r = _sc_match_atr(card, muscle_atrs, &card->type);
++	if (r < 0) {
++		sc_log(card->ctx, "Failed to match the ATRs");
++	}
+ 	if(card->type == SC_CARD_TYPE_MUSCLE_ETOKEN_72K) {
+ 		card->caps |= SC_CARD_CAP_APDU_EXT;
+ 	}
+diff --git a/src/libopensc/card-piv.c b/src/libopensc/card-piv.c
+index 61acedc8..a678b768 100644
+--- a/src/libopensc/card-piv.c
++++ b/src/libopensc/card-piv.c
+@@ -922,7 +922,11 @@ piv_get_data(sc_card_t * card, int enumtag, u8 **buf, size_t *buf_len)
+ 	SC_FUNC_CALLED(card->ctx, SC_LOG_DEBUG_VERBOSE);
+ 	sc_log(card->ctx, "#%d", enumtag);
+ 
+-	sc_lock(card); /* do check len and get data in same transaction */
++	r = sc_lock(card); /* do check len and get data in same transaction */
++	if (r != SC_SUCCESS) {
++		sc_log(card->ctx, "sc_lock failed");
++		return r;
++	}
+ 
+ 	/* assert(enumtag >= 0 && enumtag < PIV_OBJ_LAST_ENUM); */
+ 
+@@ -1481,7 +1485,7 @@ static int piv_get_key(sc_card_t *card, unsigned int alg_id, u8 **key, size_t *l
+ 	FILE *f = NULL;
+ 	char * keyfilename = NULL;
+ 	size_t expected_keylen;
+-	size_t keylen;
++	size_t keylen, readlen;
+ 	u8 * keybuf = NULL;
+ 	u8 * tkey = NULL;
+ 
+@@ -1530,11 +1534,12 @@ static int piv_get_key(sc_card_t *card, unsigned int alg_id, u8 **key, size_t *l
+ 	}
+ 	keybuf[fsize] = 0x00;    /* in case it is text need null */
+ 
+-	if (fread(keybuf, 1, fsize, f) != fsize) {
++	if ((readlen = fread(keybuf, 1, fsize, f)) != fsize) {
+ 		sc_log(card->ctx, " Unable to read key\n");
+ 		r = SC_ERROR_WRONG_LENGTH;
+ 		goto err;
+ 	}
++	keybuf[readlen] = '\0';
+ 
+ 	tkey = malloc(expected_keylen);
+ 	if (!tkey) {
+@@ -2126,14 +2131,16 @@ piv_get_serial_nr_from_CHUI(sc_card_t* card, sc_serial_number_t* serial)
+ 				/* test if guid and the fascn starts with ;9999 (in ISO 4bit + parity code) */
+ 				if (!(gbits && fascn[0] == 0xD4 && fascn[1] == 0xE7
+ 						    && fascn[2] == 0x39 && (fascn[3] | 0x7F) == 0xFF)) {
+-					serial->len = fascnlen < SC_MAX_SERIALNR ? fascnlen : SC_MAX_SERIALNR;
++					/* fascnlen is 25 */
++					serial->len = fascnlen;
+ 					memcpy (serial->value, fascn, serial->len);
+ 					r = SC_SUCCESS;
+ 					gbits = 0; /* set to skip using guid below */
+ 				}
+ 			}
+ 			if (guid && gbits) {
+-				serial->len = guidlen < SC_MAX_SERIALNR ? guidlen : SC_MAX_SERIALNR;
++				/* guidlen is 16 */
++				serial->len = guidlen;
+ 				memcpy (serial->value, guid, serial->len);
+ 				r = SC_SUCCESS;
+ 			}
+@@ -2981,7 +2988,7 @@ static int piv_match_card(sc_card_t *card)
+ 
+ static int piv_match_card_continued(sc_card_t *card)
+ {
+-	int i;
++	int i, r;
+ 	int type  = -1;
+ 	piv_private_data_t *priv = NULL;
+ 	int saved_type = card->type;
+@@ -3080,7 +3087,13 @@ static int piv_match_card_continued(sc_card_t *card)
+ 		if(piv_objects[i].flags & PIV_OBJECT_NOT_PRESENT)
+ 			priv->obj_cache[i].flags |= PIV_OBJ_CACHE_NOT_PRESENT;
+ 
+-	sc_lock(card);
++	r = sc_lock(card);
++	if (r != SC_SUCCESS) {
++		sc_debug(card->ctx, SC_LOG_DEBUG_VERBOSE, "sc_lock failed\n");
++		piv_finish(card);
++		card->type = saved_type;
++		return 0;
++	}
+ 
+ 	/*
+ 	 * detect if active AID is PIV. NIST 800-73 says Only one PIV application per card
+@@ -3464,7 +3477,11 @@ piv_pin_cmd(sc_card_t *card, struct sc_pin_cmd_data *data, int *tries_left)
+ 	if (data->cmd == SC_PIN_CMD_VERIFY && data->pin_type == SC_AC_CONTEXT_SPECIFIC) {
+ 		priv->context_specific = 1;
+ 		sc_log(card->ctx,"Starting CONTEXT_SPECIFIC verify");
+-		sc_lock(card);
++		r = sc_lock(card);
++		if (r != SC_SUCCESS) {
++			sc_log(card->ctx, "sc_lock failed");
++			return r;
++		}
+ 	}
+ 
+ 	priv->pin_cmd_verify = 1; /* tell piv_check_sw its a verify to save sw1, sw2 */
+diff --git a/src/libopensc/ctx.c b/src/libopensc/ctx.c
+index 626686a7..f24a61ca 100644
+--- a/src/libopensc/ctx.c
++++ b/src/libopensc/ctx.c
+@@ -452,6 +452,10 @@ static void *load_dynamic_driver(sc_context_t *ctx, void **dll, const char *name
+ 	const char *(*modversion)(void) = NULL;
+ 	const char *(**tmodv)(void) = &modversion;
+ 
++	if (dll == NULL) {
++		sc_log(ctx, "No dll parameter specified");
++		return NULL;
++	}
+ 	if (name == NULL) { /* should not occur, but... */
+ 		sc_log(ctx, "No module specified");
+ 		return NULL;
+@@ -481,8 +485,8 @@ static void *load_dynamic_driver(sc_context_t *ctx, void **dll, const char *name
+ 		sc_dlclose(handle);
+ 		return NULL;
+ 	}
+-	if (dll)
+-		*dll = handle;
++
++	*dll = handle;
+ 	sc_log(ctx, "successfully loaded card driver '%s'", name);
+ 	return modinit(name);
+ }
+diff --git a/src/libopensc/iso7816.c b/src/libopensc/iso7816.c
+index 718d92ff..6abd2d76 100644
+--- a/src/libopensc/iso7816.c
++++ b/src/libopensc/iso7816.c
+@@ -841,13 +841,18 @@ iso7816_set_security_env(struct sc_card *card,
+ 	if (env->flags & SC_SEC_ENV_FILE_REF_PRESENT) {
+ 		if (env->file_ref.len > 0xFF)
+ 			return SC_ERROR_INVALID_ARGUMENTS;
++		if (sizeof(sbuf) - (p - sbuf) < env->file_ref.len + 2)
++			return SC_ERROR_OFFSET_TOO_LARGE;
++
+ 		*p++ = 0x81;
+ 		*p++ = (u8) env->file_ref.len;
+-		assert(sizeof(sbuf) - (p - sbuf) >= env->file_ref.len);
+ 		memcpy(p, env->file_ref.value, env->file_ref.len);
+ 		p += env->file_ref.len;
+ 	}
+ 	if (env->flags & SC_SEC_ENV_KEY_REF_PRESENT) {
++		if (sizeof(sbuf) - (p - sbuf) < env->key_ref_len + 2)
++			return SC_ERROR_OFFSET_TOO_LARGE;
++
+ 		if (env->flags & SC_SEC_ENV_KEY_REF_SYMMETRIC)
+ 			*p++ = 0x83;
+ 		else
+@@ -855,7 +860,6 @@ iso7816_set_security_env(struct sc_card *card,
+ 		if (env->key_ref_len > 0xFF)
+ 			return SC_ERROR_INVALID_ARGUMENTS;
+ 		*p++ = env->key_ref_len & 0xFF;
+-		assert(sizeof(sbuf) - (p - sbuf) >= env->key_ref_len);
+ 		memcpy(p, env->key_ref, env->key_ref_len);
+ 		p += env->key_ref_len;
+ 	}
+diff --git a/src/libopensc/pkcs15-cac.c b/src/libopensc/pkcs15-cac.c
+index 93032113..f34425a5 100644
+--- a/src/libopensc/pkcs15-cac.c
++++ b/src/libopensc/pkcs15-cac.c
+@@ -388,6 +388,7 @@ static int sc_pkcs15emu_cac_init(sc_pkcs15_card_t *p15card)
+ 			if (r == SC_SUCCESS) {
+ 				token_name = malloc (cn_len+1);
+ 				if (!token_name) {
++					free(cn_name);
+ 					r = SC_ERROR_OUT_OF_MEMORY;
+ 					goto fail;
+ 				}
+diff --git a/src/libopensc/pkcs15-oberthur.c b/src/libopensc/pkcs15-oberthur.c
+index 3415be7c..8c126e46 100644
+--- a/src/libopensc/pkcs15-oberthur.c
++++ b/src/libopensc/pkcs15-oberthur.c
+@@ -206,8 +206,10 @@ sc_oberthur_get_certificate_authority(struct sc_pkcs15_der *der, int *out_author
+ 	buf_mem.max = buf_mem.length = der->len;
+ 
+ 	bio = BIO_new(BIO_s_mem());
+-	if(!bio)
++	if (!bio) {
++		free(buf_mem.data);
+ 		return SC_ERROR_OUT_OF_MEMORY;
++	}
+ 
+ 	BIO_set_mem_buf(bio, &buf_mem, BIO_NOCLOSE);
+ 	x = d2i_X509_bio(bio, 0);
+diff --git a/src/pkcs15init/pkcs15-authentic.c b/src/pkcs15init/pkcs15-authentic.c
+index ddccd032..0b6f9c17 100644
+--- a/src/pkcs15init/pkcs15-authentic.c
++++ b/src/pkcs15init/pkcs15-authentic.c
+@@ -355,7 +355,6 @@ authentic_sdo_allocate_prvkey(struct sc_profile *profile, struct sc_card *card,
+ 		sc_file_free(file);
+ 		LOG_TEST_RET(ctx, SC_ERROR_OUT_OF_MEMORY, "Cannot allocate 'sc_authentic_sdo'");
+ 	}
+-	*out = sdo;
+ 
+ 	sdo->magic = AUTHENTIC_SDO_MAGIC;
+ 	sdo->docp.id = key_info->key_reference &  ~AUTHENTIC_OBJECT_REF_FLAG_LOCAL;
+@@ -364,11 +363,16 @@ authentic_sdo_allocate_prvkey(struct sc_profile *profile, struct sc_card *card,
+ 	rv = authentic_docp_set_acls(card, file, authentic_v3_rsa_ac_ops,
+ 			sizeof(authentic_v3_rsa_ac_ops)/sizeof(authentic_v3_rsa_ac_ops[0]), &sdo->docp);
+ 	sc_file_free(file);
+-	LOG_TEST_RET(ctx, rv, "Cannot set key ACLs from file");
++	if (rv != SC_SUCCESS) {
++		free(sdo);
++		sc_log(ctx, "Cannot set key ACLs from file");
++		LOG_FUNC_RETURN(ctx, rv);
++	}
+ 
+ 	sc_log(ctx, "sdo(mech:%X,id:%X,acls:%s)", sdo->docp.mech, sdo->docp.id,
+ 			sc_dump_hex(sdo->docp.acl_data, sdo->docp.acl_data_len));
+ 
++	*out = sdo;
+ 	LOG_FUNC_RETURN(ctx, SC_SUCCESS);
+ }
+ 
+diff --git a/src/pkcs15init/pkcs15-myeid.c b/src/pkcs15init/pkcs15-myeid.c
+index 29f9aa22..10258667 100644
+--- a/src/pkcs15init/pkcs15-myeid.c
++++ b/src/pkcs15init/pkcs15-myeid.c
+@@ -232,6 +232,7 @@ myeid_create_dir(sc_profile_t *profile, sc_pkcs15_card_t *p15card, sc_file_t *df
+ 		for (ii = 0; create_dfs[ii]; ii++) {
+ 			sc_log(ctx, "Create '%s'", create_dfs[ii]);
+ 
++			file = NULL;
+ 			r = sc_profile_get_file(profile, create_dfs[ii], &file);
+ 			sc_file_free(file);
+ 			if (r) {
+@@ -433,7 +434,11 @@ _add_supported_algo(struct sc_profile *profile, struct sc_pkcs15_card *p15card,
+ 		    unsigned operations, unsigned mechanism, const struct sc_object_id *oid)
+ {
+ 	struct sc_supported_algo_info *algo;
++	struct sc_context *ctx = p15card->card->ctx;
+ 	algo = sc_pkcs15_get_supported_algo(p15card, operations, mechanism);
++	int rv;
++
++	LOG_FUNC_CALLED(ctx);
+ 	if (!algo) {
+ 		unsigned ref = 1, ii;
+ 
+@@ -451,7 +456,10 @@ _add_supported_algo(struct sc_profile *profile, struct sc_pkcs15_card *p15card,
+ 		}
+ 
+ 	}
+-	sc_pkcs15_add_supported_algo_ref(object, algo);
++	rv = sc_pkcs15_add_supported_algo_ref(object, algo);
++	if (rv != SC_SUCCESS) {
++		sc_log(ctx, "Failed to add algorithms refs");
++	}
+ }
+ 
+ static void
+@@ -742,7 +750,6 @@ myeid_generate_key(struct sc_profile *profile, struct sc_pkcs15_card *p15card,
+ 			break;
+ 		default:
+ 			LOG_TEST_RET(ctx, SC_ERROR_INVALID_ARGUMENTS, "Unsupported key type");
+-			break;
+ 	}
+ 
+ 	sc_log(ctx, "Generate key with ID:%s and path:%s",
+diff --git a/src/pkcs15init/pkcs15-oberthur-awp.c b/src/pkcs15init/pkcs15-oberthur-awp.c
+index f9c96373..9b12f06c 100644
+--- a/src/pkcs15init/pkcs15-oberthur-awp.c
++++ b/src/pkcs15init/pkcs15-oberthur-awp.c
+@@ -284,9 +284,10 @@ awp_create_container_record (struct sc_pkcs15_card *p15card, struct sc_profile *
+ 	memset(buff, 0, list_file->record_length);
+ 
+ 	rv = awp_new_container_entry(p15card, buff, list_file->record_length);
+-	if (rv < 0)   {
++	if (rv < 0) {
+ 		free(buff);
+-		SC_TEST_RET(ctx, SC_LOG_DEBUG_NORMAL, rv, "Cannot create container");
++		sc_log(ctx, "Cannot create container");
++		SC_FUNC_RETURN(ctx, SC_LOG_DEBUG_NORMAL, rv);
+ 	}
+ 
+ 	*(buff + 0) = (acc->pubkey_id >> 8) & 0xFF;
+diff --git a/src/tools/npa-tool-cmdline.c b/src/tools/npa-tool-cmdline.c
+index 117c6cb1..26eed929 100644
+--- a/src/tools/npa-tool-cmdline.c
++++ b/src/tools/npa-tool-cmdline.c
+@@ -1685,7 +1685,14 @@ void update_multiple_arg(void *field, char ***orig_field,
+   struct generic_list *tmp;
+ 
+   if (prev_given && list) {
++    char **old = *orig_field;
++    char *old_field = field;
+     *orig_field = (char **) realloc (*orig_field, (field_given + prev_given) * sizeof (char *));
++    if (*orig_field == NULL) {
++      free(*old);
++      fprintf(stderr, "Failed to allocate memory: aborting");
++      exit(1);
++    }
+ 
+     switch(arg_type) {
+     case ARG_INT:
+@@ -1695,6 +1702,11 @@ void update_multiple_arg(void *field, char ***orig_field,
+     default:
+       break;
+     };
++    if (*((void **)field) == NULL) {
++      free(old_field);
++      fprintf(stderr, "Failed to allocate memory: aborting");
++      exit(1);
++    }
+     
+     for (i = (prev_given - 1); i >= 0; --i)
+       {
+diff --git a/src/tools/opensc-explorer.c b/src/tools/opensc-explorer.c
+index ac5292f9..7bc5a3ff 100644
+--- a/src/tools/opensc-explorer.c
++++ b/src/tools/opensc-explorer.c
+@@ -1399,7 +1399,7 @@ static int do_get(int argc, char **argv)
+ 	if (r == SC_SUCCESS)
+ 		r = sc_select_file(card, &path, &file);
+ 	sc_unlock(card);
+-	if (r) {
++	if (r || file == NULL) {
+ 		check_ret(r, SC_AC_OP_SELECT, "unable to select file", current_file);
+ 		goto err;
+ 	}
+diff --git a/src/tools/piv-tool.c b/src/tools/piv-tool.c
+index 6dc8213d..23a58ce6 100644
+--- a/src/tools/piv-tool.c
++++ b/src/tools/piv-tool.c
+@@ -477,6 +477,7 @@ int main(int argc, char *argv[])
+ 	const char *key_info = NULL;
+ 	const char *admin_info = NULL;
+ 	sc_context_param_t ctx_param;
++	char **old_apdus = NULL;
+ 
+ 	setbuf(stderr, NULL);
+ 	setbuf(stdout, NULL);
+@@ -493,9 +494,11 @@ int main(int argc, char *argv[])
+ 			action_count++;
+ 			break;
+ 		case 's':
++			old_apdus = opt_apdus;
+ 			opt_apdus = (char **) realloc(opt_apdus,
+ 					(opt_apdu_count + 1) * sizeof(char *));
+ 			if (!opt_apdus) {
++				free(old_apdus);
+ 				err = 1;
+ 				goto end;
+ 			}
+diff --git a/src/tools/pkcs11-tool.c b/src/tools/pkcs11-tool.c
+index 64525f6a..5795a8ba 100644
+--- a/src/tools/pkcs11-tool.c
++++ b/src/tools/pkcs11-tool.c
+@@ -2695,6 +2695,7 @@ static int write_object(CK_SESSION_HANDLE session)
+ 		if (!(f = fopen(opt_attr_from_file, "rb")))
+ 			util_fatal("Couldn't open file \"%s\"", opt_attr_from_file);
+ 		certdata_len = fread(certdata, 1, sizeof(certdata), f);
++		certdata[certdata_len] = '\0';
+ 		if (certdata_len < 0)
+ 			util_fatal("Couldn't read from file \"%s\"", opt_attr_from_file);
+ 		fclose(f);
+diff --git a/src/tools/sc-hsm-tool.c b/src/tools/sc-hsm-tool.c
+index 02cdfcc6..2b424cf7 100644
+--- a/src/tools/sc-hsm-tool.c
++++ b/src/tools/sc-hsm-tool.c
+@@ -1503,13 +1503,13 @@ static int unwrap_key(sc_card_t *card, int keyid, const char *inf, const char *p
+ 		return -1;
+ 	}
+ 
+-	if ((keybloblen = fread(keyblob, 1, sizeof(keyblob), in)) < 0) {
++	keybloblen = fread(keyblob, 1, sizeof(keyblob), in);
++	fclose(in);
++	if (keybloblen < 0) {
+ 		perror(inf);
+ 		return -1;
+ 	}
+ 
+-	fclose(in);
+-
+ 	ptr = keyblob;
+ 	if ((sc_asn1_read_tag(&ptr, keybloblen, &cla, &tag, &len) != SC_SUCCESS)
+ 		   	|| ((cla & SC_ASN1_TAG_CONSTRUCTED) != SC_ASN1_TAG_CONSTRUCTED)
