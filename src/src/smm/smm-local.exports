@@ -1,6 +1,0 @@
-initialize
-get_apdus
-finalize
-module_cleanup
-module_init
-test

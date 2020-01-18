@@ -1,0 +1,13 @@
+diff -up OpenSC-777e2a3751e3f6d53f056c98e9e20e42af674fb1/etc/opensc.conf.in.pinpad OpenSC-777e2a3751e3f6d53f056c98e9e20e42af674fb1/etc/opensc.conf.in
+--- OpenSC-777e2a3751e3f6d53f056c98e9e20e42af674fb1/etc/opensc.conf.in.pinpad	2018-05-28 14:30:05.605085241 +0200
++++ OpenSC-777e2a3751e3f6d53f056c98e9e20e42af674fb1/etc/opensc.conf.in	2018-05-28 14:31:00.963495548 +0200
+@@ -101,7 +101,8 @@ app default {
+ 		#
+ 		# Enable pinpad if detected (PC/SC v2.0.2 Part 10)
+ 		# Default: true
+-		# enable_pinpad = false;
++		# RHEL 7.6: Disabled by default, because of many broken readers
++		enable_pinpad = false;
+ 		#
+ 		# Use specific pcsc provider.
+ 		# Default: @DEFAULT_PCSC_PROVIDER@

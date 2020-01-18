@@ -1,20 +1,47 @@
+%global commit0 777e2a3751e3f6d53f056c98e9e20e42af674fb1
+%global shortcommit0 %(c=%{commit0}; echo ${c:0:7})
+
 Name:           opensc
-Version:        0.14.0
-Release:        2%{?dist}
+Version:        0.16.0
+Release:        10.20170227git%{shortcommit0}%{?dist}
 Summary:        Smart card library and applications
 
 Group:          System Environment/Libraries
 License:        LGPLv2+
 URL:            https://github.com/OpenSC/OpenSC/wiki
-Source0:        http://downloads.sourceforge.net/project/opensc/OpenSC/opensc-%{version}/%{name}-%{version}.tar.gz
+Source0:        https://github.com/OpenSC/OpenSC/archive/%{commit0}.zip#/%{name}-%{version}-git%{shortcommit0}.zip
 Source1:        opensc.module
-Patch0:		opensc-export-symbols.patch
+Source2:        pkcs11-switch.sh
+Patch0:		opensc-0.16.0-coverity.patch
+Patch1:		opensc-0.16.0-cardos.patch
+Patch2:		opensc-0.16.0-lock.patch
+# Use label from certificate DN if there is none (#1448555)
+Patch3:		opensc-0.16.0-labels-from-dn.patch
+# Use Cardholder name in the token label (#1449740)
+Patch4:		opensc-0.16.0-piv-cardholder-name.patch
+# Avoid infinite loop when reading CAC cards (#1473335)
+Patch5:		opensc-0.16.0-infinite-loop.patch
+# Workaround for CAC Alt tokens (#1473418)
+Patch6:		opensc-0.16.0-cac-alt.patch
+# Copy labels from certificate (#1448555)
+Patch7:		opensc-0.16.0-coolkey-labels.patch
+# Properly parse multi-byte length (#1473418)
+Patch8:		opensc-0.16.0-simpletlv.patch
+# Disable pinpad by default (#1547117, #1547744)
+Patch9:		opensc-0.16.0-pinpad.patch
+# https://github.com/OpenSC/OpenSC/commit/74885fb
+Patch10:	opensc-0.16.0-hexadecimal-mechanism.patch
+# https://github.com/OpenSC/OpenSC/commit/ea4baf5
+Patch11:	opensc-0.16.0-ecdsa-ec-point.patch
+# https://github.com/OpenSC/OpenSC/commit/60dbebf
+Patch12:	opensc-0.16.0-cardos5.patch
 
 BuildRequires:  pcsc-lite-devel
 BuildRequires:  readline-devel
 BuildRequires:  openssl-devel
 BuildRequires:  /usr/bin/xsltproc
 BuildRequires:  docbook-style-xsl
+BuildRequires:  autoconf automake libtool
 Requires:       pcsc-lite-libs%{?_isa}
 Requires:	pcsc-lite
 Obsoletes:      mozilla-opensc-signer < 0.12.0
@@ -31,12 +58,21 @@ every software/card that does so, too.
 
 
 %prep
-%setup -q
+%setup -q -n OpenSC-%{commit0}
+%patch0 -p1 -b .coverity
+%patch1 -p1 -b .cardos
+%patch2 -p1 -b .lock
+%patch3 -p1 -b .label
+%patch4 -p1 -b .cardholder
+%patch5 -p1 -b .infinite
+%patch6 -p1 -b .cac-alt
+%patch7 -p1 -b .coolkey-labels
+%patch8 -p1 -b .simpletlv
+%patch9 -p1 -b .pinpad
+%patch10 -p1 -b .hex-mech
+%patch11 -p1 -b .ec-point
+%patch12 -p1 -b .cardos5
 
-%patch0 -p1 -b .spy-symbols
-
-sed -i -e 's/opensc.conf/opensc-%{_arch}.conf/g' src/libopensc/Makefile.in
-sed -i -e 's|"/lib /usr/lib\b|"/%{_lib} %{_libdir}|' configure # lib64 rpaths
 cp -p src/pkcs15init/README ./README.pkcs15init
 cp -p src/scconf/README.scconf .
 # No {_libdir} here to avoid multilib conflicts; it's just an example
@@ -44,6 +80,9 @@ sed -i -e 's|/usr/local/towitoko/lib/|/usr/lib/ctapi/|' etc/opensc.conf.in
 
 
 %build
+autoreconf -fvi
+sed -i -e 's/opensc.conf/opensc-%{_arch}.conf/g' src/libopensc/Makefile.in
+sed -i -e 's|"/lib /usr/lib\b|"/%{_lib} %{_libdir}|' configure # lib64 rpaths
 %configure  --disable-static \
   --disable-assert \
   --enable-pcsc \
@@ -57,6 +96,7 @@ make install DESTDIR=$RPM_BUILD_ROOT
 rm -f $RPM_BUILD_ROOT%{_sysconfdir}/opensc.conf
 install -Dpm 644 etc/opensc.conf $RPM_BUILD_ROOT%{_sysconfdir}/opensc-%{_arch}.conf
 install -Dpm 644 %{SOURCE1} $RPM_BUILD_ROOT%{_datadir}/p11-kit/modules/opensc.module
+install -Dpm 755 %{SOURCE2} $RPM_BUILD_ROOT%{_bindir}/pkcs11-switch
 # use NEWS file timestamp as reference for configuration file
 touch -r NEWS $RPM_BUILD_ROOT%{_sysconfdir}/opensc-%{_arch}.conf
 
@@ -69,6 +109,9 @@ rm -rf $RPM_BUILD_ROOT%{_datadir}/doc/opensc
 # Remove the symlink as nothing is supposed to link against libopensc.
 rm -f $RPM_BUILD_ROOT%{_libdir}/libopensc.so
 rm -f $RPM_BUILD_ROOT%{_libdir}/libsmm-local.so
+%if 0%{?rhel}
+rm -rf %{buildroot}%{_sysconfdir}/bash_completion.d/
+%endif
 
 
 %post -p /sbin/ldconfig
@@ -79,18 +122,25 @@ rm -f $RPM_BUILD_ROOT%{_libdir}/libsmm-local.so
 %files
 %defattr(-,root,root,-)
 %doc COPYING NEWS README*
+
+%if ! 0%{?rhel}
+%{_sysconfdir}/bash_completion.d/*
+%endif
+
 %config(noreplace) %{_sysconfdir}/opensc-%{_arch}.conf
 %{_datadir}/p11-kit/modules/opensc.module
 %{_bindir}/cardos-tool
 %{_bindir}/cryptoflex-tool
 %{_bindir}/eidenv
 %{_bindir}/iasecc-tool
+%{_bindir}/gids-tool
 %{_bindir}/netkey-tool
 %{_bindir}/openpgp-tool
 %{_bindir}/opensc-explorer
 %{_bindir}/opensc-tool
 %{_bindir}/piv-tool
 %{_bindir}/pkcs11-tool
+%{_bindir}/pkcs11-switch
 %{_bindir}/pkcs15-crypt
 %{_bindir}/pkcs15-init
 %{_bindir}/pkcs15-tool
@@ -101,7 +151,8 @@ rm -f $RPM_BUILD_ROOT%{_libdir}/libsmm-local.so
 %{_libdir}/opensc-pkcs11.so
 %{_libdir}/pkcs11-spy.so
 %{_libdir}/onepin-opensc-pkcs11.so
-%dir %{_libdir}/pkcs11
+%{_libdir}/pkgconfig/*.pc
+%%dir %{_libdir}/pkcs11
 %{_libdir}/pkcs11/opensc-pkcs11.so
 %{_libdir}/pkcs11/onepin-opensc-pkcs11.so
 %{_libdir}/pkcs11/pkcs11-spy.so
@@ -109,6 +160,7 @@ rm -f $RPM_BUILD_ROOT%{_libdir}/libsmm-local.so
 %{_mandir}/man1/cardos-tool.1*
 %{_mandir}/man1/cryptoflex-tool.1*
 %{_mandir}/man1/eidenv.1*
+%{_mandir}/man1/gids-tool.1*
 %{_mandir}/man1/iasecc-tool.1*
 %{_mandir}/man1/netkey-tool.1*
 %{_mandir}/man1/openpgp-tool.1*
@@ -121,10 +173,51 @@ rm -f $RPM_BUILD_ROOT%{_libdir}/libsmm-local.so
 %{_mandir}/man1/pkcs15-tool.1*
 %{_mandir}/man1/sc-hsm-tool.1*
 %{_mandir}/man1/westcos-tool.1*
+%{_mandir}/man1/dnie-tool.1*
 %{_mandir}/man5/*.5*
 
 
 %changelog
+* Tue Jul 03 2018 Jakub Jelen <jjelen@redhat.com> - 0.16.0-10.20170227git
+- Improve support for ECC-enabled CardOS 5.3 card (#1562277)
+
+* Tue Jun 19 2018 Jakub Jelen <jjelen@redhat.com> - 0.16.0-9.20170227git
+- make ECPoint behavior standards compliant by default (#1562572)
+- allow mechanism to be specified in hexadecimal (#1562572)
+- Disable pinpad by default (#1547117, #1547744)
+
+* Wed Jan 03 2018 Jakub Jelen <jjelen@redhat.com> - 0.16.0-8.20170227git
+- Copy labels from certificate (#1448555)
+- Avoid infinite loop in CAC driver when reading non-CAC cards (#1473335)
+- Properly parse Simple TLV structures in CAC driver (#1473418)
+
+* Tue Nov 07 2017 Jakub Jelen <jjelen@redhat.com> - 0.16.0-7.20170227git
+- Fix issues reported by Coverity
+- Use upstream accepted fix for CAC Alt tokens (#1473418)
+
+* Fri Nov 03 2017 Jakub Jelen <jjelen@redhat.com> - 0.16.0-6.20170227git
+- Use label from certificate DN if there is none (#1448555)
+- Use Cardholder name in the token label (#1449740)
+- Avoid infinite loop when reading CAC cards (#1473335)
+- Workaround for CAC Alt tokens (#1473418)
+
+* Thu May 18 2017 Jakub Jelen <jjelen@redhat.com> - 0.16.0-5.20170227git
+- Add missing pkcs11-switch script
+
+* Thu Apr 13 2017 Jakub Jelen <jjelen@redhat.com> - 0.16.0-4.20170227git
+- Release aquired lock for uninitialized ASEPCOS cards (#1376090)
+
+* Thu Mar 23 2017 Jakub Jelen <jjelen@redhat.com> - 0.16.0-3.20170227git
+- Fix more issues identified by Coverity scan
+
+* Thu Mar 23 2017 Jakub Jelen <jjelen@redhat.com> - 0.16.0-2.20170227git
+- Add support for CardOS 5.3
+- Fix coverity issues
+- Provide simple tool to swith PKCS#11 library in NSS DB
+
+* Tue Jan 10 2017 Jakub Jelen <jjelen@redhat.com> - 0.16.0-1.20170110git
+- Rebase to OpenSC master with support for CAC cards (#1373164)
+
 * Thu Feb 25 2016 Nikos Mavrogiannopoulos <nmav@redhat.com> 0.14.0-2
 - Export PKCS#11 symbols from spy library (#1283305)
 

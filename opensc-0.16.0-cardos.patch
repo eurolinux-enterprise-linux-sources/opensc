@@ -1,0 +1,240 @@
+From bc496dfa59c1cfbc5c47c76511d5c6b7eff5cc6c Mon Sep 17 00:00:00 2001
+From: Jakub Jelen <jjelen@redhat.com>
+Date: Thu, 26 Jan 2017 17:11:24 +0100
+Subject: [PATCH 1/4] Set security context for CardOS 5.3 with p1=0x41 (as
+ Coolkey does)
+
+---
+ src/libopensc/card-cardos.c | 16 +++++++++++-----
+ src/libopensc/cards.h       |  1 +
+ 2 files changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/src/libopensc/card-cardos.c b/src/libopensc/card-cardos.c
+index 0c14b32..008ce5c 100644
+--- a/src/libopensc/card-cardos.c
++++ b/src/libopensc/card-cardos.c
+@@ -59,7 +59,7 @@ static struct sc_atr_table cardos_atrs[] = {
+ 	/* CardOS v5.0 */
+ 	{ "3b:d2:18:00:81:31:fe:58:c9:01:14", NULL, NULL, SC_CARD_TYPE_CARDOS_V5_0, 0, NULL},
+ 	/* CardOS v5.3 */
+-	{ "3b:d2:18:00:81:31:fe:58:c9:03:16", NULL, NULL, SC_CARD_TYPE_CARDOS_V5_0, 0, NULL},
++	{ "3b:d2:18:00:81:31:fe:58:c9:03:16", NULL, NULL, SC_CARD_TYPE_CARDOS_V5_3, 0, NULL},
+ 	{ NULL, NULL, NULL, 0, 0, NULL }
+ };
+ 
+@@ -84,6 +84,8 @@ static int cardos_match_card(sc_card_t *card)
+ 		return 1;
+ 	if (card->type == SC_CARD_TYPE_CARDOS_V5_0)
+ 		return 1;
++	if (card->type == SC_CARD_TYPE_CARDOS_V5_3)
++		return 1;
+ 	if (card->type == SC_CARD_TYPE_CARDOS_M4_2) {
+ 		int rv;
+ 		sc_apdu_t apdu;
+@@ -195,7 +197,8 @@ static int cardos_init(sc_card_t *card)
+ 		|| card->type == SC_CARD_TYPE_CARDOS_M4_2B
+ 		|| card->type == SC_CARD_TYPE_CARDOS_M4_2C
+ 		|| card->type == SC_CARD_TYPE_CARDOS_M4_4
+-		|| card->type == SC_CARD_TYPE_CARDOS_V5_0) {
++		|| card->type == SC_CARD_TYPE_CARDOS_V5_0
++		|| card->type == SC_CARD_TYPE_CARDOS_V5_3) {
+ 		rsa_2048 = 1;
+ 		card->caps |= SC_CARD_CAP_APDU_EXT;
+ 	}
+@@ -230,7 +233,7 @@ static int cardos_init(sc_card_t *card)
+ 		_sc_card_add_rsa_alg(card, 2048, flags, 0);
+ 	}
+ 
+-	if (card->type == SC_CARD_TYPE_CARDOS_V5_0) {
++	if (card->type >= SC_CARD_TYPE_CARDOS_V5_0) {
+ 		/* Starting with CardOS 5, the card supports PIN query commands */
+ 		card->caps |= SC_CARD_CAP_ISO7816_PIN_INFO;
+ 	}
+@@ -249,7 +252,7 @@ static const struct sc_card_error cardos_errors[] = {
+ { 0x6f82, SC_ERROR_CARD_CMD_FAILED,	"not enough memory in xram"}, 
+ { 0x6f84, SC_ERROR_CARD_CMD_FAILED,	"general protection fault"}, 
+ 
+-/* the card doesn't now thic combination of ins+cla+p1+p2 */
++/* the card doesn't now this combination of ins+cla+p1+p2 */
+ /* i.e. command will never work */
+ { 0x6881, SC_ERROR_NO_CARD_SUPPORT,	"logical channel not supported"}, 
+ { 0x6a86, SC_ERROR_INCORRECT_PARAMETERS,"p1/p2 invalid"}, 
+@@ -781,6 +784,8 @@ cardos_set_security_env(sc_card_t *card,
+ 	if (card->type == SC_CARD_TYPE_CARDOS_CIE_V1) {
+ 		cardos_restore_security_env(card, 0x30);
+ 		apdu.p1 = 0xF1;
++	} else if (card->type == SC_CARD_TYPE_CARDOS_V5_3) {
++		apdu.p1 = 0x41;
+ 	} else {
+ 		apdu.p1 = 0x01;
+ 	}
+@@ -1235,7 +1240,8 @@ cardos_logout(sc_card_t *card)
+ 		   	|| card->type == SC_CARD_TYPE_CARDOS_M4_2C
+ 		   	|| card->type == SC_CARD_TYPE_CARDOS_M4_3
+ 		   	|| card->type == SC_CARD_TYPE_CARDOS_M4_4
+-			|| card->type == SC_CARD_TYPE_CARDOS_V5_0) {
++			|| card->type == SC_CARD_TYPE_CARDOS_V5_0
++			|| card->type == SC_CARD_TYPE_CARDOS_V5_3) {
+ 		sc_apdu_t apdu;
+ 		int       r;
+ 		sc_path_t path;
+diff --git a/src/libopensc/cards.h b/src/libopensc/cards.h
+index d71c02f..9f8f641 100644
+--- a/src/libopensc/cards.h
++++ b/src/libopensc/cards.h
+@@ -47,6 +47,7 @@ enum {
+ 	SC_CARD_TYPE_CARDOS_CIE_V1, /* Italian CIE (eID) v1 */
+ 	SC_CARD_TYPE_CARDOS_M4_4,
+ 	SC_CARD_TYPE_CARDOS_V5_0,
++	SC_CARD_TYPE_CARDOS_V5_3,
+ 
+ 	/* flex/cyberflex drivers */
+ 	SC_CARD_TYPE_FLEX_BASE = 2000,
+-- 
+2.9.3
+
+
+From 5dec534cf07e45ffb0209a53d6145022ecd9259a Mon Sep 17 00:00:00 2001
+From: Jakub Jelen <jjelen@redhat.com>
+Date: Mon, 30 Jan 2017 14:33:05 +0100
+Subject: [PATCH 2/4] Do not emulate signatures in CardOS 5.3
+
+Remove the bogus SC_ALGORITHM_NEED_USAGE which prevents using the
+actual implementation in cardos_compute_signature().
+
+It might be bogus also in previous version, but I don't have a way
+to verify against these cards.
+---
+ src/libopensc/card-cardos.c | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/src/libopensc/card-cardos.c b/src/libopensc/card-cardos.c
+index 008ce5c..a21e67a 100644
+--- a/src/libopensc/card-cardos.c
++++ b/src/libopensc/card-cardos.c
+@@ -177,11 +177,13 @@ static int cardos_init(sc_card_t *card)
+ 	card->cla = 0x00;
+ 
+ 	/* Set up algorithm info. */
+-	flags = SC_ALGORITHM_NEED_USAGE
+-		| SC_ALGORITHM_RSA_RAW
++	flags = SC_ALGORITHM_RSA_RAW
+ 		| SC_ALGORITHM_RSA_HASH_NONE
+ 		| SC_ALGORITHM_ONBOARD_KEY_GEN
+ 		;
++	if (card->type != SC_CARD_TYPE_CARDOS_V5_3)
++		flags |= SC_ALGORITHM_NEED_USAGE;
++
+ 	_sc_card_add_rsa_alg(card,  512, flags, 0);
+ 	_sc_card_add_rsa_alg(card,  768, flags, 0);
+ 	_sc_card_add_rsa_alg(card, 1024, flags, 0);
+@@ -252,7 +254,7 @@ static const struct sc_card_error cardos_errors[] = {
+ { 0x6f82, SC_ERROR_CARD_CMD_FAILED,	"not enough memory in xram"}, 
+ { 0x6f84, SC_ERROR_CARD_CMD_FAILED,	"general protection fault"}, 
+ 
+-/* the card doesn't now this combination of ins+cla+p1+p2 */
++/* the card doesn't know this combination of ins+cla+p1+p2 */
+ /* i.e. command will never work */
+ { 0x6881, SC_ERROR_NO_CARD_SUPPORT,	"logical channel not supported"}, 
+ { 0x6a86, SC_ERROR_INCORRECT_PARAMETERS,"p1/p2 invalid"}, 
+-- 
+2.9.3
+
+
+From 057197c7abf29715a2b7793045c35adf2a34dc17 Mon Sep 17 00:00:00 2001
+From: Jakub Jelen <jjelen@redhat.com>
+Date: Fri, 10 Mar 2017 16:37:43 +0100
+Subject: [PATCH 3/4] Hack for returning the padding back in CardOS 5.3
+
+---
+ src/libopensc/card-cardos.c | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/src/libopensc/card-cardos.c b/src/libopensc/card-cardos.c
+index a21e67a..39ec4ac 100644
+--- a/src/libopensc/card-cardos.c
++++ b/src/libopensc/card-cardos.c
+@@ -979,6 +979,30 @@ cardos_compute_signature(sc_card_t *card, const u8 *data, size_t datalen,
+ }
+ 
+ static int
++cardos_decipher(struct sc_card *card,
++		const u8 * crgram, size_t crgram_len,
++		u8 * out, size_t outlen)
++{
++	int r;
++	u8 *tmp = NULL;
++	size_t tmp_len = crgram_len;
++
++	assert(card != NULL && crgram != NULL && out != NULL);
++	LOG_FUNC_CALLED(card->ctx);
++
++	tmp = malloc(tmp_len);
++	r = iso_ops->decipher(card, crgram, crgram_len, tmp, tmp_len);
++
++	/* add bogus padding, because the card removes it */
++	if (sc_pkcs1_encode(card->ctx, SC_ALGORITHM_RSA_HASH_NONE|SC_ALGORITHM_RSA_PAD_PKCS1,
++			tmp, r, out, &outlen, crgram_len) != SC_SUCCESS)
++		LOG_FUNC_RETURN(card->ctx, SC_ERROR_INTERNAL);
++	out[1] = 0x02; /* this is encryption-padding */
++
++	LOG_FUNC_RETURN(card->ctx, outlen);
++}
++
++static int
+ cardos_lifecycle_get(sc_card_t *card, int *mode)
+ {
+ 	sc_apdu_t	apdu;
+@@ -1278,6 +1302,7 @@ static struct sc_card_driver * sc_get_driver(void)
+ 	cardos_ops.set_security_env = cardos_set_security_env;
+ 	cardos_ops.restore_security_env = cardos_restore_security_env;
+ 	cardos_ops.compute_signature = cardos_compute_signature;
++	cardos_ops.decipher = cardos_decipher;
+ 
+ 	cardos_ops.list_files = cardos_list_files;
+ 	cardos_ops.check_sw = cardos_check_sw;
+-- 
+2.9.3
+
+
+From 515f761f5564e91302ce672d30a24d6e6738e349 Mon Sep 17 00:00:00 2001
+From: Jakub Jelen <jjelen@redhat.com>
+Date: Mon, 13 Mar 2017 15:15:48 +0100
+Subject: [PATCH 4/4] With older cards, use iso decipher
+
+---
+ src/libopensc/card-cardos.c | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/src/libopensc/card-cardos.c b/src/libopensc/card-cardos.c
+index 39ec4ac..d479065 100644
+--- a/src/libopensc/card-cardos.c
++++ b/src/libopensc/card-cardos.c
+@@ -992,10 +992,22 @@ cardos_decipher(struct sc_card *card,
+ 
+ 	tmp = malloc(tmp_len);
+ 	r = iso_ops->decipher(card, crgram, crgram_len, tmp, tmp_len);
++	if (r < 0)
++		LOG_FUNC_RETURN(card->ctx, r);
++
++	if (card->type != SC_CARD_TYPE_CARDOS_V5_3) {
++		/* XXX */
++		memcpy(out, tmp, tmp_len);
++		outlen = tmp_len;
++		free(tmp);
++		LOG_FUNC_RETURN(card->ctx, r);
++	}
+ 
+ 	/* add bogus padding, because the card removes it */
+-	if (sc_pkcs1_encode(card->ctx, SC_ALGORITHM_RSA_HASH_NONE|SC_ALGORITHM_RSA_PAD_PKCS1,
+-			tmp, r, out, &outlen, crgram_len) != SC_SUCCESS)
++	r = sc_pkcs1_encode(card->ctx, SC_ALGORITHM_RSA_HASH_NONE|SC_ALGORITHM_RSA_PAD_PKCS1,
++		tmp, r, out, &outlen, crgram_len);
++	free(tmp);
++	if (r != SC_SUCCESS)
+ 		LOG_FUNC_RETURN(card->ctx, SC_ERROR_INTERNAL);
+ 	out[1] = 0x02; /* this is encryption-padding */
+ 
+-- 
+2.9.3
+

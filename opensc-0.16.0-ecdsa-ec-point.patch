@@ -1,0 +1,27 @@
+From ea4baf50d57a7a41164fedcd1b10fdb0438305c5 Mon Sep 17 00:00:00 2001
+From: AnthonyA <ascanio.alba7@gmail.com>
+Date: Mon, 19 Mar 2018 15:58:21 +0800
+Subject: [PATCH] pkcs11-tool: make ECPoint behaviour standards compliant by
+ default
+
+Fixes #1286. The behaviour of pkcs11-tool will follow the standard -
+send DER. If EC_POINT_NO_ASN1_OCTET_STRING is defined then it will
+write plain bytes.
+---
+ src/tools/pkcs11-tool.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/tools/pkcs11-tool.c b/src/tools/pkcs11-tool.c
+index 876bba2dc..63e5c5f7f 100644
+--- a/src/tools/pkcs11-tool.c
++++ b/src/tools/pkcs11-tool.c
+@@ -2632,7 +2632,7 @@ parse_ec_pkey(EVP_PKEY *pkey, int private, struct gostkey_info *gost)
+ 		header_len = point-gost->public.value;
+ 		memcpy(point, buf, point_len);
+ 		gost->public.len = header_len+point_len;
+-#ifndef EC_POINT_NO_ASN1_OCTET_STRING // workaround for non-compliant cards not expecting DER encoding
++#ifdef EC_POINT_NO_ASN1_OCTET_STRING // workaround for non-compliant cards not expecting DER encoding
+ 		gost->public.len   -= header_len;
+ 		gost->public.value += header_len;
+ #endif
+
