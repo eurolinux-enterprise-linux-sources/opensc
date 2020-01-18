@@ -3,7 +3,7 @@
 
 Name:           opensc
 Version:        0.16.0
-Release:        5.20170227git%{shortcommit0}%{?dist}
+Release:        8.20170227git%{shortcommit0}%{?dist}
 Summary:        Smart card library and applications
 
 Group:          System Environment/Libraries
@@ -15,6 +15,18 @@ Source2:        pkcs11-switch.sh
 Patch0:		opensc-0.16.0-coverity.patch
 Patch1:		opensc-0.16.0-cardos.patch
 Patch2:		opensc-0.16.0-lock.patch
+# Use label from certificate DN if there is none (#1448555)
+Patch3:		opensc-0.16.0-labels-from-dn.patch
+# Use Cardholder name in the token label (#1449740)
+Patch4:		opensc-0.16.0-piv-cardholder-name.patch
+# Avoid infinite loop when reading CAC cards (#1473335)
+Patch5:		opensc-0.16.0-infinite-loop.patch
+# Workaround for CAC Alt tokens (#1473418)
+Patch6:		opensc-0.16.0-cac-alt.patch
+# Copy labels from certificate (#1448555)
+Patch7:		opensc-0.16.0-coolkey-labels.patch
+# Properly parse multi-byte length (#1473418)
+Patch8:		opensc-0.16.0-simpletlv.patch
 
 BuildRequires:  pcsc-lite-devel
 BuildRequires:  readline-devel
@@ -42,6 +54,12 @@ every software/card that does so, too.
 %patch0 -p1 -b .coverity
 %patch1 -p1 -b .cardos
 %patch2 -p1 -b .lock
+%patch3 -p1 -b .label
+%patch4 -p1 -b .cardholder
+%patch5 -p1 -b .infinite
+%patch6 -p1 -b .cac-alt
+%patch7 -p1 -b .coolkey-labels
+%patch8 -p1 -b .simpletlv
 
 cp -p src/pkcs15init/README ./README.pkcs15init
 cp -p src/scconf/README.scconf .
@@ -148,6 +166,21 @@ rm -rf %{buildroot}%{_sysconfdir}/bash_completion.d/
 
 
 %changelog
+* Wed Jan 03 2018 Jakub Jelen <jjelen@redhat.com> - 0.16.0-8.20170227git
+- Copy labels from certificate (#1448555)
+- Avoid infinite loop in CAC driver when reading non-CAC cards (#1473335)
+- Properly parse Simple TLV structures in CAC driver (#1473418)
+
+* Tue Nov 07 2017 Jakub Jelen <jjelen@redhat.com> - 0.16.0-7.20170227git
+- Fix issues reported by Coverity
+- Use upstream accepted fix for CAC Alt tokens (#1473418)
+
+* Fri Nov 03 2017 Jakub Jelen <jjelen@redhat.com> - 0.16.0-6.20170227git
+- Use label from certificate DN if there is none (#1448555)
+- Use Cardholder name in the token label (#1449740)
+- Avoid infinite loop when reading CAC cards (#1473335)
+- Workaround for CAC Alt tokens (#1473418)
+
 * Thu May 18 2017 Jakub Jelen <jjelen@redhat.com> - 0.16.0-5.20170227git
 - Add missing pkcs11-switch script
 
